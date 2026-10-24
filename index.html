@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Le token ne part que vers api.github.com ; aucun script tiers, aucun style en ligne. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Prépa Hyrox</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <strong class="brand">Prépa Hyrox</strong>
+    <nav id="nav" aria-label="Sections">
+      <a href="#/saison" data-route="saison">Saison</a>
+      <a href="#/semaine" data-route="semaine">Semaine</a>
+      <a href="#/courses" data-route="courses">Courses</a>
+    </nav>
+    <span class="spacer"></span>
+    <button type="button" id="refresh" class="ghost" hidden>Actualiser</button>
+    <button type="button" id="logout" class="ghost" hidden>Se déconnecter</button>
+  </div>
+</header>
+<main id="app" aria-live="polite"></main>
+<noscript><p class="wrap">Cette page a besoin de JavaScript.</p></noscript>
+<script src="vendor/js-yaml.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
