@@ -328,3 +328,13 @@ details.table-view + details.table-view { margin-top: 6px; }
 .chart text.capg { font-size: 11px; font-weight: 700; fill: var(--on-warning); }
 .chart text.capg.dans { fill: var(--on-fill); }
 .chart text.capg.incomplet { fill: var(--muted); }
+
+/* ---------- calories discrètes : légende resserrée, séance sous chaque jour ---------- */
+.legend.small { font-size: 12px; gap: 6px 14px; margin-bottom: 4px; }
+.legend.small .key { width: 10px; height: 10px; }
+.chart text.sl { font-size: 10.5px; fill: var(--ink2); }
+.chart text.sl.sm { font-size: 9px; }
+.chart text.sl.skipped { text-decoration: line-through; fill: var(--muted); }
+.chart text.sl.prevu, .chart text.sl.deplacee { fill: var(--muted); }
+#kcal-toggle[aria-pressed="true"] { color: var(--muted); }
+.chart text.sl.c-repos, .chart text.sl.c-congé { fill: var(--muted); }   /* les séances ressortent, le repos s'efface */

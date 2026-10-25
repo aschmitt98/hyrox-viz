@@ -355,3 +355,33 @@ export function segmentsMoyens(dates, nut, vue) {
   return out;
 }
 export const grammes = (day) => ({ prot: day.prot, gluc: day.gluc, lip: day.lip });
+
+/* ---------- type de séance en un mot ----------
+ * 97 intitulés différents existent dans le plan : on les ramène à quelques catégories lisibles sous un jour.
+ * Les parenthèses sont du commentaire (« VMA (faite au lieu de Hyrox-style) » est une VMA) et une condition
+ * (« … SI feu vert kiné ») ne décrit pas la séance. Le texte complet reste dans l'infobulle. */
+export function categoriesSeance(type) {
+  let t = String(type || '').replace(/\([^)]*\)/g, ' ');
+  t = t.split(/\s(?:si)\s/i)[0];
+  if (/vacances|kitesurf|\babsent\b|\bvol\b|✈/i.test(t)) return ['Congé'];
+  // « Repos — le demi-bloc est déplacé » est un repos ; « Repos forcé + RDV kiné » vaut surtout par le kiné.
+  if (/^[^\p{L}]*repos/iu.test(t)) return /kin[ée]/i.test(t) ? ['Kiné'] : ['Repos'];
+  const hyrox = /hyrox|\bsim\b|\bbloc\b/i.test(t);
+  const found = [];
+  const add = (nom, re) => { const m = re.exec(t); if (m) found.push([m.index, nom]); };
+  add('Kiné', /kin[ée]/i);
+  add('Force', /\bforce\b|muscu|jambes|\bpdc\b/i);
+  if (!hyrox && !found.some((f) => f[1] === 'Force')) add('Force', /circuit/i);
+  add('Hyrox', /hyrox|\bsim\b|\bbloc\b/i);
+  add('VMA', /vma|vameval|30\/30|intervalles/i);
+  add('Tempo', /tempo|seuil/i);
+  add('Z2', hyrox ? /z2|footing|\brun\b|\blong\b/i : /z2|footing|\brun\b|course|\blong\b/i);
+  add('Rando', /rando/i);
+  if (!found.length) return [/repos|marche|mobilité/i.test(t) ? 'Repos' : 'Autre'];
+  return found.sort((a, b) => a[0] - b[0]).map((f) => f[1]);
+}
+/* compact : une seule catégorie (suivie de « + » s'il y en a d'autres), pour les 28 px d'un jour du mois. */
+export function typeCourt(type, compact) {
+  const c = categoriesSeance(type);
+  return compact ? (c.length > 1 ? `${c[0]}+` : c[0]) : c.slice(0, 2).join('+');
+}

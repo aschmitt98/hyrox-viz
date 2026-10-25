@@ -119,3 +119,13 @@ export function setKcalView(v) {
   try { localStorage.setItem(KEY_VUE, v); } catch (e) { /* rien */ }
   rerender();
 }
+
+/* ---------- afficher ou masquer toutes les calories (choix mémorisé) ---------- */
+const KEY_KCAL = 'hyrox_viz_calories';
+ui.calories = true;
+try { if (localStorage.getItem(KEY_KCAL) === '0') ui.calories = false; } catch (e) { /* stockage indisponible */ }
+export function setCalories(on) {
+  ui.calories = !!on;
+  try { localStorage.setItem(KEY_KCAL, on ? '1' : '0'); } catch (e) { /* rien */ }
+  rerender();
+}

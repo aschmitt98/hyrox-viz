@@ -1,6 +1,6 @@
 /* Vues : Saison, Mois, Semaine, Courses. Chaque vue reçoit le conteneur et les données déjà chargées. */
 import {
-  h, fill, fr, parseDay, addDays, mondayOf, todayIso, daysTo, dayLabel, fullDate, rangeLabel, monthLabel,
+  ui, h, fill, fr, parseDay, addDays, mondayOf, todayIso, daysTo, dayLabel, fullDate, rangeLabel, monthLabel,
   range7, shiftMonth, monthDates, secondes, hms, paceLabel, JOURS_COURTS, bindTip, tipRow, card, tableView, tile, legendItem, navLink, notice,
 } from './lib.js';
 import {
@@ -10,13 +10,17 @@ import {
   volumeChart, efChart, kcalChart, kcalWeeksChart, adherence, chargesSection, monthlyKmChart, chargeLabel,
 } from './charts.js';
 
+// Calories masquées : les vues se comportent comme si le journal n'existait pas (aucun bandeau).
+const nutOf = (data) => (ui.calories ? data.nutrition : { ok: false, masque: true, days: {}, cible: null });
+const seancesDe = (data) => (d) => (data.index[d] ? data.index[d].seances : []);
 const ef3 = (v) => (v == null ? '—' : v.toFixed(3).replace('.', ','));
 const shortType = (t) => String(t).replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /* ---------- blocs communs ---------- */
 function nutritionNotices(data) {
-  const nut = data.nutrition;
+  const nut = nutOf(data);
+  if (nut.masque) return null;
   if (!nut.ok) return notice(`Journal alimentaire indisponible : ${nut.reason}.`);
   if (nut.derniere && daysTo(nut.derniere) < -2) {
     return notice(`Le journal alimentaire s’arrête au ${fullDate(nut.derniere)} : les jours suivants n’ont pas encore été rapatriés dans le repo nutrition.`);
@@ -46,7 +50,7 @@ function dayTipNodes(date, day, cls) {
 
 /* Une case de calendrier : séances du jour (statut + type) et calories (pastille colorée). */
 function calCell(data, date, inMonth) {
-  const nut = data.nutrition;
+  const nut = nutOf(data);
   const info = data.index[date];
   const el = h('div', { class: `cal-cell${inMonth ? '' : ' out'}${date === todayIso() ? ' today' : ''}` },
     h('div', { class: 'cal-d' }, String(parseDay(date).getDate())));
@@ -78,7 +82,7 @@ function weekSummary(data, monday) {
   const dates = range7(monday);
   const ts = trainingStats(data, dates);
   const wk = data.weekByMonday[monday];
-  const ks = data.nutrition.ok ? kcalStats(dates, data.nutrition) : null;
+  const ks = nutOf(data).ok ? kcalStats(dates, nutOf(data)) : null;
   const el = h('div', { class: 'cal-sum' }, h('div', { class: 'cal-sum-h' }, wk ? wk.sem : '—'));
   if (ts.n) el.append(h('div', {}, `${fr(ts.km)} km${ts.partiel ? '*' : ''}`), h('div', { class: 'note' }, `${ts.faites}/${ts.prevues} séances`));
   if (ks && ks.mean != null) el.append(h('div', { class: `cal-k k-${ks.classe}` }, `${KCAL[ks.classe].glyph} ${fr(ks.mean, 0)}`));
@@ -96,7 +100,7 @@ function efChartCard(data) {
 export function viewSaison(app, data, warnings) {
   const cur = currentWeek(data);
   const j = daysTo(CFG.raceDate);
-  const nut = data.nutrition;
+  const nut = nutOf(data);
   const courseOk = data.courses.filter((c) => /Men Open/i.test(String(c.format)) && secondes(c.chrono_officiel));
   const best = courseOk.reduce((a, c) => (!a || secondes(c.chrono_officiel) < secondes(a.chrono_officiel) ? c : a), null);
   const ts = trainingStats(data, range7(mondayOf(cur.debut)));
@@ -139,7 +143,7 @@ export function viewMois(app, data, arg) {
   let ym = /^\d{4}-\d{2}$/.test(arg || '') ? arg : todayIso().slice(0, 7);
   if (ym < span.first) ym = span.first;
   if (ym > span.last) ym = span.last;
-  const nut = data.nutrition;
+  const nut = nutOf(data);
   const mDates = monthDates(ym);
   const start = mondayOf(mDates[0]);
   const end = addDays(mondayOf(mDates[mDates.length - 1]), 6);
@@ -166,7 +170,7 @@ export function viewMois(app, data, arg) {
       tile('Efficience moyenne', ef3(ts.efMean), ts.efN ? `${ts.efN} sortie${ts.efN > 1 ? 's' : ''} Z2` : 'aucune sortie Z2 exploitable'),
       ks ? kcalTile('Calories moyennes', ks, nut) : null),
     card('Calendrier', 'Séances (statut + type) et calories du jour. Dernière colonne : bilan de la semaine (* = distances incomplètes).', cal),
-    nut.ok ? card('Calories par jour', null, ...kcalChart(mDates, nut)) : null,
+    nut.ok ? card('Calories par jour', null, ...kcalChart(mDates, nut, { seancesOf: seancesDe(data) })) : null,
   ]);
 }
 
@@ -227,7 +231,7 @@ export function viewSemaine(app, data, wanted) {
   const w = data.weeks.find((x) => x.sem === wanted) || currentWeek(data);
   const i = data.weeks.indexOf(w);
   const prev = data.weeks[i - 1], next = data.weeks[i + 1];
-  const nut = data.nutrition;
+  const nut = nutOf(data);
   const dates = range7(mondayOf(w.debut));
   const ts = trainingStats(data, dates);
   const ks = nut.ok ? kcalStats(dates, nut) : null;
@@ -257,7 +261,7 @@ export function viewSemaine(app, data, wanted) {
       contexte ? h('details', { class: 'more' }, h('summary', {}, 'Objectif et note de volume'),
         w.objectif ? h('div', { class: 'txt' }, String(w.objectif)) : null,
         w.avertissement ? h('div', { class: 'txt note' }, String(w.avertissement)) : null) : null),
-    nut.ok ? card('Calories par jour', null, ...kcalChart(dates, nut, { W: 760, values: true, jours: true })) : null,
+    nut.ok ? card('Calories par jour', null, ...kcalChart(dates, nut, { W: 760, values: true, jours: true, seancesOf: seancesDe(data) })) : null,
     h('div', { class: 'sessions' }, w.seances.map((x) => sessionCard(x, data))),
   ]);
 }

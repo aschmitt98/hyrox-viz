@@ -3,7 +3,7 @@
  * Aucune donnée dans ce repo : la page lit les repos privés `hyrox-coach` et `nutrition` via l'API
  * GitHub, avec un token fine-grained (Contents : lecture seule) saisi par l'utilisatrice. Les données
  * restent en mémoire ; seul le token peut être mémorisé (case à cocher). */
-import { h, $, hideTip, setRerender } from './lib.js';
+import { h, $, hideTip, setRerender, ui, setCalories } from './lib.js';
 import { CFG, ApiError, loadAll, buildIndex } from './data.js';
 import { viewSaison, viewMois, viewSemaine, viewAnalyse, viewCourses } from './views.js';
 
@@ -22,7 +22,13 @@ const store = {
 };
 
 /* ---------- écrans d'état ---------- */
+function syncKcalToggle() {
+  $('kcal-toggle').textContent = ui.calories ? 'Masquer les calories' : 'Afficher les calories';
+  $('kcal-toggle').setAttribute('aria-pressed', String(!ui.calories));
+}
 function setChrome(loggedIn) {
+  $('kcal-toggle').hidden = !loggedIn;
+  syncKcalToggle();
   $('refresh').hidden = !loggedIn;
   $('logout').hidden = !loggedIn;
   $('nav').hidden = !loggedIn;
@@ -95,6 +101,7 @@ function logout() { store.clear(); renderLogin(); }
 function render() {
   if (!state.data) return;
   hideTip();
+  syncKcalToggle();
   const [route, arg] = (location.hash.replace(/^#\/?/, '') || 'saison').split('/');
   const views = {
     saison: (app) => viewSaison(app, state.data, state.data.warnings),
@@ -115,6 +122,7 @@ function render() {
 setRerender(render);
 window.addEventListener('hashchange', render);
 $('refresh').addEventListener('click', () => load(store.get()));
+$('kcal-toggle').addEventListener('click', () => setCalories(!ui.calories));
 $('logout').addEventListener('click', logout);
 const token = store.get();
 if (token) load(token); else renderLogin();

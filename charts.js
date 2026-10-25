@@ -7,7 +7,7 @@ import {
 } from './lib.js';
 import {
   CFG, KCAL, STATUTS, statutOf, classeJour, kcalStats, trainingStats, monthsSpan, chargesParExercice,
-  VUES_KCAL, segmentsKcal, segmentsMoyens, grammes,
+  VUES_KCAL, segmentsKcal, segmentsMoyens, grammes, typeCourt, categoriesSeance,
 } from './data.js';
 
 const SVG_ARIA = (t) => `${t} Les données sont dans le tableau sous le graphique.`;
@@ -141,13 +141,14 @@ function kcalControl() {
     }, v.label)));
 }
 
-function kcalLegend(nut, vue, withMeans) {
-  const statuts = STATUT_VUES.map((k) => legendItem(`k-${k}`,
-    `${KCAL[k].glyph} ${KCAL[k].label}${k === 'dans' ? ` (±${CFG.tolerance} kcal)` : ''}${k === 'incomplet' ? ' (sans dîner), exclue des moyennes' : ''}`));
+function kcalLegend(nut, vue, withMeans, avecSeances) {
+  const court = { dans: `dans la cible (±${CFG.tolerance})`, sous: 'sous la cible', haut: 'au-dessus', incomplet: 'incomplète (sans dîner), hors moyennes' };
+  const statuts = STATUT_VUES.map((k) => legendItem(`k-${k}`, `${KCAL[k].glyph} ${court[k]}`));
   const segs = vue === 'statut' ? [] : VUES_KCAL[vue].segs.map((sg) => legendItem(`seg-${sg.cls}`, sg.label));
-  return h('div', { class: 'legend' }, ...segs, ...(vue === 'statut' ? statuts : [h('span', { class: 'sep' }, '|'), ...statuts]),
-    withMeans ? legendItem('line mean', 'Moyenne (cible stricte)') : null,
-    nut.cible ? legendItem('k-band', `Cible ${nut.cible.lo}–${nut.cible.hi} kcal`) : null);
+  return h('div', { class: 'legend small' }, ...segs, ...(vue === 'statut' ? statuts : [h('span', { class: 'sep' }, '|'), ...statuts]),
+    withMeans ? legendItem('line mean', 'moyenne (cible stricte)') : null,
+    nut.cible ? legendItem('k-band', `cible ${nut.cible.lo}–${nut.cible.hi}`) : null,
+    avecSeances ? h('span', { class: 'note' }, 'Sous chaque jour : la séance (barrée = sautée)') : null);
 }
 
 function kcalFrame(W, H, m, nut, maxV) {
@@ -204,22 +205,28 @@ function repartitionTip(day, vue) {
 /* Un graphique par jour : barres selon la cible, les macros ou les repas ; moyenne de chaque semaine en dessous. */
 export function kcalChart(dates, nut, opts = {}) {
   const vue = ui.kcal, stacked = vue !== 'statut';
-  const W = opts.W || 960, H = 300 + (stacked ? 24 : 0), m = { t: stacked ? 46 : 22, r: 52, b: 58, l: 46, cap: stacked ? 24 : 0 };
+  const seancesOf = opts.seancesOf || (() => []);
+  const compact = dates.length > 10;                 // ~28 px par jour : une catégorie suffit
+  const W = opts.W || 960, IH = 104;
+  const m = { t: stacked ? 36 : 14, r: 52, b: 84, l: 46, cap: stacked ? 22 : 0 };
+  const H = m.t + IH + m.b;
   const cible = nut.cible;
   const maxV = Math.max(cible ? cible.hi + CFG.tolerance : 0, ...dates.map((d) => (nut.days[d] ? nut.days[d].kcal : 0)));
   const { svg, iw, ih, y } = kcalFrame(W, H, m, nut, maxV);
   svg.setAttribute('aria-label', SVG_ARIA('Calories mangées par jour, comparées à la cible.'));
   const band = iw / dates.length, bw = Math.min(24, band * 0.62);
   const today = todayIso();
+  const y0 = m.t + ih;
 
   dates.forEach((d, i) => {
     const day = nut.days[d];
+    const ss = seancesOf(d);
     const cx = m.l + band * i + band / 2, x = cx - bw / 2;
     const cls = day ? classeJour(day, cible) : null;
     const wd = (parseDay(d).getDay() + 6) % 7;
     const g = s('g', { class: 'col', tabindex: '0', role: 'img',
       'aria-label': `${dayLabel(d)} : ${day ? fr(day.kcal, 0) + ' kcal, ' + KCAL[cls].label : 'pas de journal'}` });
-    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t - m.cap, width: band, height: ih + m.cap }));
+    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t - m.cap, width: band, height: ih + m.cap + 48 }));
     if (day && cls === 'incomplet') {
       g.append(s('rect', { class: 'kbar incomplet', x, y: y(day.kcal), width: bw, height: y(0) - y(day.kcal), rx: 3 }));
     } else if (day && stacked) {
@@ -229,12 +236,17 @@ export function kcalChart(dates, nut, opts = {}) {
     }
     if (day && stacked) capMark(g, cx, y(day.kcal), cls);
     if (opts.values && day) g.append(s('text', { class: 'val', x: cx, y: y(day.kcal) - (stacked ? 28 : 6), 'text-anchor': 'middle' }, fr(day.kcal, 0)));
+    ss.slice(0, 2).forEach((x, k) => g.append(s('text', { class: `sl ${x.statut} c-${categoriesSeance(x.type)[0].toLowerCase()}${compact ? ' sm' : ''}`, x: cx, y: y0 + 30 + k * 11, 'text-anchor': 'middle' },
+      `${typeCourt(x.type, compact)}${k === 1 && ss.length > 2 ? '+' : ''}`)));
     svg.append(g, s('text', { class: d === today ? 'cur' : '', x: cx, y: H - m.b + 16, 'text-anchor': 'middle' },
       opts.jours ? `${JOURS_COURTS[wd]} ${parseDay(d).getDate()}` : String(parseDay(d).getDate())));
     bindTip(g, () => {
-      if (!day) return [h('div', { class: 't' }, dayLabel(d)), h('div', {}, 'Pas de journal alimentaire ce jour-là.')];
+      const seanceNodes = ss.map((x) => h('div', {}, `${statutOf(x.statut).glyph} ${x.type}`));
+      if (!seanceNodes.length) seanceNodes.push(h('div', { class: 't' }, 'Aucune séance ce jour-là'));
+      if (!day) return [h('div', { class: 't' }, dayLabel(d)), ...seanceNodes, h('div', { class: 't' }, 'Pas de journal alimentaire ce jour-là.')];
       const nodes = [
         h('div', { class: 't' }, dayLabel(d)),
+        ...seanceNodes,
         h('div', { class: 'v' }, `${fr(day.kcal, 0)} kcal · ${fr(day.prot, 0)} g de protéines`),
         tipRow(`k-${cls}`, `${KCAL[cls].glyph} ${KCAL[cls].label}`),
       ];
@@ -274,13 +286,14 @@ export function kcalChart(dates, nut, opts = {}) {
   const meansTable = means.length ? tableView(['Semaine du', 'Jours comptés', 'Moyenne (kcal/j)', 'Statut'],
     means.map(({ g, st }) => [dayLabel(g.mon), `${st.n}${st.incomplets ? ` (+${st.incomplets} incomplet${st.incomplets > 1 ? 's' : ''})` : ''}`,
       fr(st.mean, 0), st.classe ? KCAL[st.classe].label : '—']), [1, 2], 'Voir les moyennes') : null;
-  return [kcalControl(), kcalLegend(nut, vue, true), h('div', { class: 'chart' }, svg), meansTable, table];
+  return [kcalControl(), kcalLegend(nut, vue, true, !!opts.seancesOf), h('div', { class: 'chart' }, svg), meansTable, table];
 }
 
 /* Moyenne par semaine sur toute la saison : une barre par semaine, cible stricte. */
 export function kcalWeeksChart(items, nut) {
   const vue = ui.kcal, stacked = vue !== 'statut';
-  const W = 960, H = 270 + (stacked ? 24 : 0), m = { t: stacked ? 46 : 22, r: 52, b: 34, l: 46, cap: stacked ? 24 : 0 };
+  const W = 960, m = { t: stacked ? 36 : 14, r: 52, b: 28, l: 46, cap: stacked ? 22 : 0 };
+  const H = m.t + 96 + m.b;
   const cible = nut.cible;
   const { svg, iw, ih, y } = kcalFrame(W, H, m, nut, Math.max(cible ? cible.hi : 0, ...items.map((it) => it.mean)));
   svg.setAttribute('aria-label', SVG_ARIA('Moyenne de calories par jour, semaine par semaine.'));

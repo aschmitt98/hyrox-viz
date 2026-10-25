@@ -45,6 +45,8 @@ Ces choix sont à connaître pour lire les couleurs ; ils se changent dans `data
   - *Repas* : barre empilée petit-déjeuner / déjeuner / dîner / en-cas.
   - Dans les deux vues empilées, le statut vert / jaune / orange passe dans une pastille au-dessus de la barre (✓ ▼ ▲).
   - Les segments somment toujours au total de la journée ; les tableaux « Voir les données » donnent les valeurs exactes.
+- **Séance de chaque jour** : sous chaque barre, le type de séance en un mot (Force, Hyrox, Z2, VMA, Tempo, Kiné, Repos, Congé), barré si la séance a été sautée. L'intitulé complet est dans l'infobulle. Les parenthèses et les conditions (« … si feu vert kiné ») sont ignorées pour classer une séance.
+- **Masquer les calories** : le bouton en haut de la page retire toutes les calories de toutes les vues (graphiques, pastilles du calendrier, tuiles, bandeaux). Le choix est mémorisé dans le navigateur.
 
 ## Sécurité
 
