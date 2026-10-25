@@ -1,12 +1,14 @@
 /* Vues : Saison, Mois, Semaine, Courses. Chaque vue reçoit le conteneur et les données déjà chargées. */
 import {
   h, fill, fr, parseDay, addDays, mondayOf, todayIso, daysTo, dayLabel, fullDate, rangeLabel, monthLabel,
-  range7, secondes, hms, JOURS_COURTS, bindTip, tipRow, card, tableView, tile, legendItem, navLink, notice,
+  range7, shiftMonth, monthDates, secondes, hms, paceLabel, JOURS_COURTS, bindTip, tipRow, card, tableView, tile, legendItem, navLink, notice,
 } from './lib.js';
 import {
-  CFG, KCAL, statutOf, currentWeek, trainingStats, efPoints, kcalStats, classeJour, monthsSpan,
+  CFG, KCAL, statutOf, currentWeek, trainingStats, efPoints, kcalStats, classeJour, monthsSpan, seanceMetrics,
 } from './data.js';
-import { volumeChart, efChart, kcalChart, kcalWeeksChart, adherence } from './charts.js';
+import {
+  volumeChart, efChart, kcalChart, kcalWeeksChart, adherence, chargesSection, monthlyKmChart, chargeLabel,
+} from './charts.js';
 
 const ef3 = (v) => (v == null ? '—' : v.toFixed(3).replace('.', ','));
 const shortType = (t) => String(t).replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
@@ -123,7 +125,6 @@ export function viewSaison(app, data, warnings) {
       data.vma && data.vma.actuelle != null ? tile('VMA', `${fr(data.vma.actuelle)} km/h`, data.vma.cible != null ? `cible ${fr(data.vma.cible)} km/h` : null) : null,
       tile(`Semaine ${cur.sem}`, `${ts.faites} / ${ts.prevues}`, 'séances faites')),
     card('Volume de course par semaine', 'Kilomètres courus, tels qu’ils sont documentés dans le réalisé, face à la cible du plan.', ...volumeChart(data, cur.num)),
-    efChartCard(data),
     nut.ok
       ? card('Calories par semaine', `Moyenne par jour, semaine par semaine${nut.cible ? ` — cible ${nut.cible.lo}–${nut.cible.hi} kcal${nut.cible.mode ? ` (mode « ${nut.cible.mode} »)` : ''}` : ''}. Les jours sans dîner saisi sont exclus.`,
         ...(items.length ? kcalWeeksChart(items, nut) : [h('p', { class: 'note' }, 'Aucune semaine avec une journée complète.')]))
@@ -133,26 +134,18 @@ export function viewSaison(app, data, warnings) {
 }
 
 /* ---------- Mois ---------- */
-const shiftMonth = (ym, k) => {
-  const [y, m] = ym.split('-').map(Number);
-  const d = new Date(y, m - 1 + k, 1);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-};
-
 export function viewMois(app, data, arg) {
   const span = monthsSpan(data);
   let ym = /^\d{4}-\d{2}$/.test(arg || '') ? arg : todayIso().slice(0, 7);
   if (ym < span.first) ym = span.first;
   if (ym > span.last) ym = span.last;
-  const [y, m] = ym.split('-').map(Number);
   const nut = data.nutrition;
-  const dim = new Date(y, m, 0).getDate();
-  const monthDates = Array.from({ length: dim }, (_, i) => `${ym}-${pad2(i + 1)}`);
-  const start = mondayOf(monthDates[0]);
-  const end = addDays(mondayOf(monthDates[dim - 1]), 6);
+  const mDates = monthDates(ym);
+  const start = mondayOf(mDates[0]);
+  const end = addDays(mondayOf(mDates[mDates.length - 1]), 6);
 
-  const ts = trainingStats(data, monthDates);
-  const ks = nut.ok ? kcalStats(monthDates, nut) : null;
+  const ts = trainingStats(data, mDates);
+  const ks = nut.ok ? kcalStats(mDates, nut) : null;
 
   const cal = h('div', { class: 'cal' },
     ...[...JOURS_COURTS, 'semaine'].map((d) => h('div', { class: 'cal-h' }, d)));
@@ -173,29 +166,61 @@ export function viewMois(app, data, arg) {
       tile('Efficience moyenne', ef3(ts.efMean), ts.efN ? `${ts.efN} sortie${ts.efN > 1 ? 's' : ''} Z2` : 'aucune sortie Z2 exploitable'),
       ks ? kcalTile('Calories moyennes', ks, nut) : null),
     card('Calendrier', 'Séances (statut + type) et calories du jour. Dernière colonne : bilan de la semaine (* = distances incomplètes).', cal),
-    nut.ok ? card('Calories par jour', null, ...kcalChart(monthDates, nut)) : null,
+    nut.ok ? card('Calories par jour', null, ...kcalChart(mDates, nut)) : null,
   ]);
 }
 
 /* ---------- Semaine ---------- */
-function sessionCard(x) {
+const chip = (cls, ...kids) => h('span', { class: `m ${cls || ''}`.trim() }, ...kids);
+
+/* Plan et réel côte à côte : l'écart au plan est l'information la plus utile. */
+function kmBars(x, mt) {
+  const real = x.km, plan = mt.planKm;
+  if (!real && !plan) return null;
+  const max = Math.max(real || 0, plan || 0);
+  const row = (label, cls, v, extra) => {
+    const b = h('div', { class: `kb ${cls}` });
+    b.style.width = `${(v / max) * 100}%`;
+    return h('div', { class: 'kmrow' }, h('span', { class: 'kl' }, label), h('div', { class: 'kt' }, b),
+      h('span', { class: 'kv' }, `${fr(v, 2)} km`, extra));
+  };
+  const delta = real && plan ? Math.round((real / plan - 1) * 100) : null;
+  return h('div', { class: 'kmbars' },
+    plan ? row('plan', 'plan', plan) : null,
+    real ? row('réel', 'real', real, delta != null ? h('span', { class: 'delta' }, ` ${delta > 0 ? '▲ +' : delta < 0 ? '▼ ' : ''}${delta} %`) : null) : null);
+}
+
+/* Une séance en un coup d'œil : statut, chiffres, charges levées. Le texte (plan, réalisé, débrief) est replié. */
+function sessionCard(x, data) {
   const st = statutOf(x.statut);
-  const p = x.plan;
-  const resume = [p.duree, p.lieu, p.rpe_cible].filter((v) => v && String(v).trim() !== '—').join(' · ');
-  const lines = [['Échauffement', p.echauffement], ['Corps', p.corps], ['Retour au calme', p.retour_calme],
-    ['Intensité', p.intensite], ['Notes du coach', p.notes_coach]].filter(([, t]) => t && String(t).trim() !== '—');
-  const block = (title, open, kids) => (kids.length ? h('details', { open }, h('summary', {}, title), ...kids) : null);
-  const para = (t) => h('div', { class: 'txt' }, String(t));
-  const realise = [x.detail && para(x.detail), x.ressenti && h('div', { class: 'txt' }, h('strong', {}, 'Ressenti — '), String(x.ressenti))].filter(Boolean);
-  return h('article', { class: 'sess' },
+  const mt = seanceMetrics(x);
+  const nom = (k) => (data.charges.exercices[k] ? data.charges.exercices[k].nom : k);
+  const charges = data.charges.ok ? data.charges.entries.filter((e) => e.date === x.date) : [];
+  const chips = [];
+  if (mt.planDuree) chips.push(chip('ghost', `plan ${mt.planDuree}`));
+  if (x.ef) chips.push(chip('', `${paceLabel(x.ef.pace)} · FC ${x.ef.fc} · EF ${ef3(x.ef.ef)}`));
+  else if (mt.fc) chips.push(chip('', `FC moy ${mt.fc}`));
+  if (mt.rpe) chips.push(chip('', `RPE ${mt.rpe}${mt.rpePlan ? ` · cible ${mt.rpePlan}` : ''}`));
+  const lines = [['Échauffement', x.plan.echauffement], ['Corps', x.plan.corps], ['Retour au calme', x.plan.retour_calme],
+    ['Intensité', x.plan.intensite], ['Notes du coach', x.plan.notes_coach]].filter(([, v]) => v && String(v).trim() !== '—');
+  const sec = (title, kids) => (kids.length ? h('div', { class: 'sec' }, h('h4', {}, title), ...kids) : null);
+  const para = (v) => h('div', { class: 'txt' }, String(v));
+  const body = [
+    sec('Plan', lines.map(([l, v]) => h('div', { class: 'txt' }, h('strong', {}, `${l} — `), String(v)))),
+    sec('Réalisé', [x.detail && para(x.detail), x.ressenti && h('div', { class: 'txt' }, h('strong', {}, 'Ressenti — '), String(x.ressenti))].filter(Boolean)),
+    sec('Débrief', x.debrief ? [para(x.debrief)] : []),
+  ].filter(Boolean);
+  return h('article', { class: `sess s-${st.cls}` },
     h('div', { class: 'sess-h' },
       h('span', { class: 'sess-d' }, x.date ? dayLabel(x.date) : (x.jour || '')),
       h('span', { class: 'sess-t' }, x.type),
       h('span', { class: `chip ${st.cls}` }, `${st.glyph} ${st.label}`)),
-    resume && h('div', { class: 'plan' }, `Plan : ${resume}`),
-    block('Plan détaillé', x.statut === 'prevu', lines.map(([l, t]) => h('div', { class: 'txt' }, h('strong', {}, `${l} — `), String(t)))),
-    block('Réalisé', x.statut !== 'prevu', realise),
-    block('Débrief', false, x.debrief ? [para(x.debrief)] : []));
+    chips.length ? h('div', { class: 'metrics' }, ...chips) : null,
+    kmBars(x, mt),
+    charges.length ? h('div', { class: 'metrics' }, ...charges.map((e) =>
+      chip(e.statut === 'mesure' ? 'c-mes' : 'c-cp', h('strong', {}, nom(e.exercice)), ` ${chargeLabel(e)}`))) : null,
+    mt.alerte ? h('div', { class: 'alerte' }, mt.alerte) : null,
+    body.length ? h('details', { class: 'more' }, h('summary', {}, 'Détails'), ...body) : null);
 }
 
 export function viewSemaine(app, data, wanted) {
@@ -203,16 +228,15 @@ export function viewSemaine(app, data, wanted) {
   const i = data.weeks.indexOf(w);
   const prev = data.weeks[i - 1], next = data.weeks[i + 1];
   const nut = data.nutrition;
-  const monday = mondayOf(w.debut);
-  const dates = range7(monday);
+  const dates = range7(mondayOf(w.debut));
   const ts = trainingStats(data, dates);
   const ks = nut.ok ? kcalStats(dates, nut) : null;
   const select = h('select', { 'aria-label': 'Semaine', onchange: (e) => { location.hash = `#/semaine/${e.target.value}`; } },
     data.weeks.map((x) => h('option', { value: x.sem, selected: x.sem === w.sem }, `${x.sem} · ${x.debut ? rangeLabel(x.debut, x.fin) : ''}`)));
-  const meta = (l, v) => (v ? h('div', {}, h('div', { class: 'l' }, l), h('div', { class: 'v' }, v)) : null);
 
   const strip = h('div', { class: 'cal week' }, ...JOURS_COURTS.map((d) => h('div', { class: 'cal-h' }, d)));
   dates.forEach((d) => strip.append(calCell(data, d, true)));
+  const contexte = w.objectif || w.avertissement;
 
   fill(app, {}, [
     h('div', { class: 'weekbar' },
@@ -222,17 +246,35 @@ export function viewSemaine(app, data, wanted) {
     nutritionNotices(data),
     h('div', { class: 'tiles' },
       tile('Km courus', `${fr(ts.km)} km`, `${w.cible != null ? `cible du plan ${fr(w.cible)} km` : 'sans cible'}${ts.partiel ? ' · partiel' : ''}`),
-      tile('Séances faites', `${ts.faites} / ${ts.prevues}`, 'les séances déplacées ne comptent pas'),
-      tile('Efficience moyenne', ef3(ts.efMean), ts.efN ? `${ts.efN} sortie${ts.efN > 1 ? 's' : ''} Z2` : 'aucune sortie Z2 exploitable'),
+      tile('Séances faites', `${ts.faites} / ${ts.prevues}`, 'les déplacées ne comptent pas'),
+      tile('Efficience moyenne', ef3(ts.efMean), ts.efN ? `${ts.efN} sortie${ts.efN > 1 ? 's' : ''} Z2` : 'aucune sortie Z2'),
       ks ? kcalTile('Calories moyennes', ks, nut) : null),
-    card(`${w.sem} · ${rangeLabel(dates[0], dates[6])}`, w.objectif,
-      h('div', { class: 'wkmeta' },
-        meta('Bloc', [w.bloc, w.phase].filter(Boolean).join(' · ')),
-        meta('Cible chrono', w.cibleChrono)),
+    h('section', { class: 'card wkhead' },
+      h('div', { class: 'wk-t' },
+        h('h2', {}, `${w.sem} · ${rangeLabel(dates[0], dates[6])}`),
+        w.bloc || w.phase ? h('span', { class: 'tag' }, [w.bloc, w.phase].filter(Boolean).join(' · ')) : null),
       strip,
-      w.avertissement ? h('details', { class: 'table-view' }, h('summary', {}, 'Note sur la cible de volume'), h('div', { class: 'txt note' }, String(w.avertissement))) : null),
+      contexte ? h('details', { class: 'more' }, h('summary', {}, 'Objectif et note de volume'),
+        w.objectif ? h('div', { class: 'txt' }, String(w.objectif)) : null,
+        w.avertissement ? h('div', { class: 'txt note' }, String(w.avertissement)) : null) : null),
     nut.ok ? card('Calories par jour', null, ...kcalChart(dates, nut, { W: 760, values: true, jours: true })) : null,
-    h('div', { class: 'sessions' }, w.seances.map(sessionCard)),
+    h('div', { class: 'sessions' }, w.seances.map((x) => sessionCard(x, data))),
+  ]);
+}
+
+/* ---------- Analyse ---------- */
+export function viewAnalyse(app, data) {
+  const ch = data.charges;
+  fill(app, {}, [
+    h('h2', {}, 'Analyse'),
+    ch.ok && ch.entries.length
+      ? card('Charges par exercice',
+        `${ch.entries.length} charges relevées dans les réalisés, chacune citée mot pour mot dans historique/charges_par_exercice.yaml. Chaque petit graphique a sa propre échelle : compare les trajectoires, pas les kilos d’un exercice à l’autre.`,
+        ...chargesSection(data))
+      : card('Charges par exercice', null,
+        notice('Le fichier historique/charges_par_exercice.yaml est introuvable sur la branche main de hyrox-coach. S’il vient d’être ajouté sur une autre branche, il apparaîtra après sa fusion dans main.')),
+    efChartCard(data),
+    card('Km par mois', 'Kilomètres de course documentés dans le réalisé, mois par mois.', ...monthlyKmChart(data)),
   ]);
 }
 

@@ -125,10 +125,11 @@ async function loadCoach(token) {
   const listing = await ghGet(CFG.coach, 'plan/semaines', token, true);
   const names = listing.filter((f) => f.type === 'file' && /^W\d+\.yaml$/.test(f.name)).map((f) => f.name);
   if (!names.length) throw new ApiError(404, 'Aucun fichier W<n>.yaml trouvé dans plan/semaines');
-  const [weekTexts, coursesText, profilsText] = await Promise.all([
+  const [weekTexts, coursesText, profilsText, chargesText] = await Promise.all([
     Promise.all(names.map((n) => ghGet(CFG.coach, `plan/semaines/${n}`, token))),
     ghGet(CFG.coach, 'historique/courses.yaml', token),
     ghGet(CFG.coach, 'coach/profils.yaml', token).catch(() => null),
+    ghGet(CFG.coach, 'historique/charges_par_exercice.yaml', token).catch(() => null),
   ]);
   const weeks = [];
   weekTexts.forEach((txt, i) => {
@@ -143,9 +144,20 @@ async function loadCoach(token) {
     const c = profilsText && jsyaml.load(profilsText).amarine.course;
     if (c) vma = { actuelle: c.vma_kmh, cible: c.vma_cible_dec_2026 };
   } catch (e) { /* tuile VMA omise */ }
+  // Fichier facultatif : absent tant qu'il n'est pas fusionné dans la branche lue.
+  let charges = { ok: false, exercices: {}, entries: [] };
+  if (chargesText) {
+    try {
+      const c = jsyaml.load(chargesText) || {};
+      charges = {
+        ok: true, exercices: c.exercices || {},
+        entries: (c.entrees || []).map((e) => ({ ...e, date: iso(e.date), kg: Number(e.kg), kgMax: e.kg_max == null ? null : Number(e.kg_max) })),
+      };
+    } catch (e) { warnings.push(`charges_par_exercice.yaml illisible : ${e.message.split('\n')[0]}`); }
+  }
   const withChrono = weeks.filter((w) => w.cibleChrono);
   return {
-    weeks, warnings, vma,
+    weeks, warnings, vma, charges,
     cibleChrono: withChrono.length ? String(withChrono[withChrono.length - 1].cibleChrono) : null,
     courses: (courses.courses || []).map((c) => ({ ...c, date: iso(c.date) })),
     leviers: courses.leviers_restants || [],
@@ -157,9 +169,11 @@ export function summarizeDay(j) {
   const e = Array.isArray(j.entrees) ? j.entrees : [];
   const sum = (k) => Math.round(e.reduce((a, x) => a + (Number(x[k]) || 0), 0));
   const repas = new Set(e.map((x) => x.repas));
+  const parRepas = { 'petit-dej': 0, dejeuner: 0, diner: 0, encas: 0 };
+  for (const x of e) parRepas[x.repas in parRepas ? x.repas : 'encas'] += Number(x.kcal) || 0;
   return {
-    date: j.date, kcal: sum('kcal'), prot: sum('prot'), fibres: sum('fibres'), n: e.length,
-    repas: [...repas], diner: repas.has('diner'), poids: j.poids == null ? null : j.poids, sport: j.sport || null,
+    date: j.date, kcal: sum('kcal'), prot: sum('prot'), gluc: sum('gluc'), lip: sum('lip'), fibres: sum('fibres'), n: e.length,
+    repas: [...repas], parRepas, diner: repas.has('diner'), poids: j.poids == null ? null : j.poids, sport: j.sport || null,
   };
 }
 // Lit la cible actuelle dans profil.md (même règle que scripts/sync_journal.py du repo nutrition).
@@ -273,3 +287,71 @@ export function monthsSpan(data) {
   return { first: all[0].slice(0, 7), last: all[all.length - 1].slice(0, 7) };
 }
 export { addDays };
+
+/* Charges regroupées par exercice, chaque série triée par date. */
+export function chargesParExercice(data) {
+  const out = {};
+  for (const e of data.charges.entries) {
+    const meta = data.charges.exercices[e.exercice] || { nom: e.exercice, charge: '' };
+    (out[e.exercice] = out[e.exercice] || { cle: e.exercice, nom: meta.nom, unite: meta.charge, points: [] }).points.push(e);
+  }
+  for (const ex of Object.values(out)) ex.points.sort((a, b) => (a.date < b.date ? -1 : 1));
+  return Object.values(out);
+}
+
+const RPE = /RPE\s*(\d+(?:\s*[-–]\s*\d+)?)/;
+const clean = (m) => (m ? m[1].replace(/\s/g, '').replace('-', '–') : null);
+/* Ce qu'une séance montre d'un coup d'œil : tout vient de champs déjà lus, rien n'est inventé. */
+export function seanceMetrics(x) {
+  const p = x.plan || {};
+  const detail = String(x.detail || '');
+  const fc = detail.match(/FC\s*moy(?:enne)?\.?\s*:?\s*(\d{2,3})/i);
+  const alerte = String(x.debrief || '').split('\n').map((l) => l.trim()).find((l) => /^(\u26A0|🔴)/.test(l));
+  return {
+    planDuree: p.duree && String(p.duree).trim() !== '—' ? String(p.duree) : null,
+    planKm: typeof p.distance_estimee_km === 'number' && p.distance_estimee_km > 0 ? p.distance_estimee_km : null,
+    rpe: clean(String(x.ressenti || '').match(RPE)),
+    rpePlan: clean(String(p.rpe_cible || '').match(RPE)),
+    fc: fc ? Number(fc[1]) : null,
+    alerte: alerte ? (alerte.length > 120 ? `${alerte.slice(0, 117).trimEnd()}…` : alerte) : null,
+  };
+}
+
+/* ---------- répartition d'une journée : par macro ou par repas ----------
+ * Les segments somment toujours au total de la journée. Certaines lignes du journal sont saisies avec
+ * les calories seules (plat de restaurant, boisson) : leurs kcal n'ont aucune macro derrière. Elles
+ * forment le segment « Non détaillé » plutôt que d'être réparties au hasard entre les macros. */
+export const VUES_KCAL = {
+  statut: { label: 'Cible' },
+  macros: {
+    label: 'Macros',
+    segs: [
+      { key: 'prot', label: 'Protéines', cls: 's1' }, { key: 'gluc', label: 'Glucides', cls: 's2' },
+      { key: 'lip', label: 'Lipides', cls: 's3' }, { key: 'autres', label: 'Non détaillé', cls: 'sx' },
+    ],
+  },
+  repas: {
+    label: 'Repas',
+    segs: [
+      { key: 'petit-dej', label: 'Petit-déjeuner', cls: 's1' }, { key: 'dejeuner', label: 'Déjeuner', cls: 's2' },
+      { key: 'diner', label: 'Dîner', cls: 's3' }, { key: 'encas', label: 'En-cas', cls: 's4' },
+    ],
+  },
+};
+export function segmentsKcal(day, vue) {
+  if (vue === 'repas') return { ...day.parRepas };
+  const prot = 4 * day.prot, gluc = 4 * day.gluc, lip = 9 * day.lip;
+  const reste = day.kcal - (prot + gluc + lip);
+  if (reste >= 0) return { prot, gluc, lip, autres: reste };
+  const k = day.kcal / (prot + gluc + lip);          // macros > kcal (arrondis) : on ramène à l'échelle
+  return { prot: prot * k, gluc: gluc * k, lip: lip * k, autres: 0 };
+}
+/* Moyenne par segment sur les jours COMPLETS d'une liste de dates. */
+export function segmentsMoyens(dates, nut, vue) {
+  const full = dates.map((d) => nut.days[d]).filter((x) => x && x.diner);
+  if (!full.length) return null;
+  const out = {};
+  for (const x of full) for (const [k, v] of Object.entries(segmentsKcal(x, vue))) out[k] = (out[k] || 0) + v / full.length;
+  return out;
+}
+export const grammes = (day) => ({ prot: day.prot, gluc: day.gluc, lip: day.lip });

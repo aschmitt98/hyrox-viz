@@ -2,10 +2,13 @@
  * (jamais en ligne : la CSP interdit les styles inline), infobulle + focus clavier sur chaque
  * marque, et un tableau équivalent sous chaque graphique. */
 import {
-  h, s, fr, parseDay, addDays, mondayOf, todayIso, dayLabel, rangeLabel, paceLabel,
-  JOURS_COURTS, MOIS, bindTip, tipRow, tableView, legendItem,
+  h, s, fr, parseDay, addDays, mondayOf, todayIso, dayLabel, rangeLabel, paceLabel, monthLabel, shiftMonth, monthDates,
+  JOURS_COURTS, MOIS, bindTip, tipRow, tableView, legendItem, range7, ui, setKcalView,
 } from './lib.js';
-import { CFG, KCAL, STATUTS, statutOf, classeJour, kcalStats } from './data.js';
+import {
+  CFG, KCAL, STATUTS, statutOf, classeJour, kcalStats, trainingStats, monthsSpan, chargesParExercice,
+  VUES_KCAL, segmentsKcal, segmentsMoyens, grammes,
+} from './data.js';
 
 const SVG_ARIA = (t) => `${t} Les données sont dans le tableau sous le graphique.`;
 
@@ -127,11 +130,25 @@ export function efChart(points) {
 }
 
 /* ---------- calories ---------- */
-const kcalLegend = (nut, withMeans) => h('div', { class: 'legend' },
-  ...['dans', 'sous', 'haut'].map((k) => legendItem(`k-${k}`, `${KCAL[k].glyph} ${KCAL[k].label}${k === 'dans' ? ` (±${CFG.tolerance} kcal)` : ''}`)),
-  legendItem('k-incomplet', `${KCAL.incomplet.glyph} ${KCAL.incomplet.label} (sans dîner), exclue des moyennes`),
-  withMeans ? legendItem('line mean', 'Moyenne (cible stricte)') : null,
-  nut.cible ? legendItem('k-band', `Cible ${nut.cible.lo}–${nut.cible.hi} kcal`) : null);
+const STATUT_VUES = ['dans', 'sous', 'haut', 'incomplet'];
+
+/* Sélecteur : la même journée vue par rapport à la cible, par macro, ou par repas. */
+function kcalControl() {
+  return h('div', { class: 'seg-ctl', role: 'group', 'aria-label': 'Répartition des calories' },
+    h('span', { class: 'note' }, 'Afficher :'),
+    ...Object.entries(VUES_KCAL).map(([k, v]) => h('button', {
+      type: 'button', class: ui.kcal === k ? 'on' : '', 'aria-pressed': String(ui.kcal === k), onclick: () => setKcalView(k),
+    }, v.label)));
+}
+
+function kcalLegend(nut, vue, withMeans) {
+  const statuts = STATUT_VUES.map((k) => legendItem(`k-${k}`,
+    `${KCAL[k].glyph} ${KCAL[k].label}${k === 'dans' ? ` (±${CFG.tolerance} kcal)` : ''}${k === 'incomplet' ? ' (sans dîner), exclue des moyennes' : ''}`));
+  const segs = vue === 'statut' ? [] : VUES_KCAL[vue].segs.map((sg) => legendItem(`seg-${sg.cls}`, sg.label));
+  return h('div', { class: 'legend' }, ...segs, ...(vue === 'statut' ? statuts : [h('span', { class: 'sep' }, '|'), ...statuts]),
+    withMeans ? legendItem('line mean', 'Moyenne (cible stricte)') : null,
+    nut.cible ? legendItem('k-band', `Cible ${nut.cible.lo}–${nut.cible.hi} kcal`) : null);
+}
 
 function kcalFrame(W, H, m, nut, maxV) {
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -142,7 +159,7 @@ function kcalFrame(W, H, m, nut, maxV) {
     svg.append(s('rect', { class: 'band', x: m.l, y: y(nut.cible.hi), width: iw, height: y(nut.cible.lo) - y(nut.cible.hi) }));
   }
   grid(svg, m, W, y, top, 500, (v) => fr(v, 0));
-  svg.append(s('text', { x: m.l - 8, y: m.t - 9, 'text-anchor': 'end' }, 'kcal'));
+  svg.append(s('text', { x: m.l - 8, y: m.t - 9 - (m.cap || 0), 'text-anchor': 'end' }, 'kcal'));
   if (nut.cible) {
     svg.append(s('text', { class: 'band-l', x: W - m.r + 6, y: y(nut.cible.hi) + 4 }, `${nut.cible.hi}`),
       s('text', { class: 'band-l', x: W - m.r + 6, y: y(nut.cible.lo) + 4 }, `${nut.cible.lo}`));
@@ -150,9 +167,44 @@ function kcalFrame(W, H, m, nut, maxV) {
   return { svg, iw, ih, y, top };
 }
 
-/* Un graphique par jour : barres colorées selon la cible, moyenne de chaque semaine en dessous. */
+/* Empile les segments (macros ou repas) ; seul le dernier est arrondi, un trait de la couleur du fond les sépare. */
+function stackBar(g, x, bw, y, segs, order) {
+  let acc = 0;
+  const parts = [];
+  for (const sg of order) {
+    const v = segs[sg.key] || 0;
+    if (v > 0 && y(acc) - y(acc + v) >= 1) parts.push({ sg, lo: acc, hi: acc + v });
+    acc += v;
+  }
+  parts.forEach((pt, i) => {
+    const yb = y(pt.lo), yt = y(pt.hi);
+    g.append(i === parts.length - 1
+      ? s('path', { class: `stk ${pt.sg.cls}`, d: barPath(x, yt, bw, yb) })
+      : s('rect', { class: `stk ${pt.sg.cls}`, x, y: yt, width: bw, height: yb - yt }));
+  });
+}
+/* Pastille de statut au-dessus de la barre : le vert / jaune / orange survit à l'empilement. */
+function capMark(g, cx, yTop, cls) {
+  if (cls === 'neutre') return;
+  g.append(s('rect', { class: `cap ${cls}`, x: cx - 9, y: yTop - 21, width: 18, height: 16, rx: 4 }),
+    s('text', { class: `capg ${cls}`, x: cx, y: yTop - 9, 'text-anchor': 'middle' }, KCAL[cls].glyph));
+}
+const pct = (v, tot) => (tot ? Math.round((v / tot) * 100) : 0);
+function repartitionTip(day, vue) {
+  const segs = segmentsKcal(day, vue);
+  const g = grammes(day);
+  const rows = VUES_KCAL[vue].segs.filter((sg) => (segs[sg.key] || 0) >= 1).map((sg) =>
+    tipRow(`seg-${sg.cls}`, `${sg.label} : ${fr(segs[sg.key], 0)} kcal${vue === 'macros' && g[sg.key] != null ? ` · ${fr(g[sg.key], 0)} g` : ''} (${pct(segs[sg.key], day.kcal)} %)`));
+  if (vue === 'macros' && pct(segs.autres, day.kcal) >= 15) {
+    rows.push(h('div', { class: 't' }, 'Calories saisies sans macros (plat du commerce, boisson…) : la répartition de cette journée est incomplète.'));
+  }
+  return rows;
+}
+
+/* Un graphique par jour : barres selon la cible, les macros ou les repas ; moyenne de chaque semaine en dessous. */
 export function kcalChart(dates, nut, opts = {}) {
-  const W = opts.W || 960, H = 300, m = { t: 22, r: 52, b: 58, l: 46 };
+  const vue = ui.kcal, stacked = vue !== 'statut';
+  const W = opts.W || 960, H = 300 + (stacked ? 24 : 0), m = { t: stacked ? 46 : 22, r: 52, b: 58, l: 46, cap: stacked ? 24 : 0 };
   const cible = nut.cible;
   const maxV = Math.max(cible ? cible.hi + CFG.tolerance : 0, ...dates.map((d) => (nut.days[d] ? nut.days[d].kcal : 0)));
   const { svg, iw, ih, y } = kcalFrame(W, H, m, nut, maxV);
@@ -167,13 +219,16 @@ export function kcalChart(dates, nut, opts = {}) {
     const wd = (parseDay(d).getDay() + 6) % 7;
     const g = s('g', { class: 'col', tabindex: '0', role: 'img',
       'aria-label': `${dayLabel(d)} : ${day ? fr(day.kcal, 0) + ' kcal, ' + KCAL[cls].label : 'pas de journal'}` });
-    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t, width: band, height: ih }));
+    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t - m.cap, width: band, height: ih + m.cap }));
     if (day && cls === 'incomplet') {
       g.append(s('rect', { class: 'kbar incomplet', x, y: y(day.kcal), width: bw, height: y(0) - y(day.kcal), rx: 3 }));
+    } else if (day && stacked) {
+      stackBar(g, x, bw, y, segmentsKcal(day, vue), VUES_KCAL[vue].segs);
     } else if (day) {
       g.append(s('path', { class: `kbar ${cls}`, d: barPath(x, y(day.kcal), bw, y(0)) }));
     }
-    if (opts.values && day) g.append(s('text', { class: 'val', x: cx, y: y(day.kcal) - 6, 'text-anchor': 'middle' }, fr(day.kcal, 0)));
+    if (day && stacked) capMark(g, cx, y(day.kcal), cls);
+    if (opts.values && day) g.append(s('text', { class: 'val', x: cx, y: y(day.kcal) - (stacked ? 28 : 6), 'text-anchor': 'middle' }, fr(day.kcal, 0)));
     svg.append(g, s('text', { class: d === today ? 'cur' : '', x: cx, y: H - m.b + 16, 'text-anchor': 'middle' },
       opts.jours ? `${JOURS_COURTS[wd]} ${parseDay(d).getDate()}` : String(parseDay(d).getDate())));
     bindTip(g, () => {
@@ -183,6 +238,7 @@ export function kcalChart(dates, nut, opts = {}) {
         h('div', { class: 'v' }, `${fr(day.kcal, 0)} kcal · ${fr(day.prot, 0)} g de protéines`),
         tipRow(`k-${cls}`, `${KCAL[cls].glyph} ${KCAL[cls].label}`),
       ];
+      if (stacked && cls !== 'incomplet') nodes.push(...repartitionTip(day, vue));
       if (cls === 'incomplet') nodes.push(h('div', { class: 't' }, 'Aucun dîner saisi : exclue des moyennes.'));
       if (day.sport) nodes.push(h('div', { class: 't' }, `Sport : ${day.sport}`));
       return nodes;
@@ -208,42 +264,60 @@ export function kcalChart(dates, nut, opts = {}) {
       `${wide ? 'moy ' : ''}${glyph} ${fr(st.mean, 0)}`.trim()));
     means.push({ g, st });
   }
-  const table = tableView(['Date', 'kcal', 'Protéines (g)', 'Statut', 'Sport'],
+  const segHead = stacked ? VUES_KCAL[vue].segs.map((sg) => `${sg.label} (kcal)`) : [];
+  const table = tableView(['Date', 'kcal', ...segHead, 'Protéines (g)', 'Statut', 'Sport'],
     dates.filter((d) => nut.days[d]).map((d) => {
       const day = nut.days[d], cls = classeJour(day, cible);
-      return [dayLabel(d), fr(day.kcal, 0), fr(day.prot, 0), KCAL[cls].label, day.sport || ''];
-    }), [1, 2]);
+      const sg = stacked ? VUES_KCAL[vue].segs.map((x) => fr(segmentsKcal(day, vue)[x.key] || 0, 0)) : [];
+      return [dayLabel(d), fr(day.kcal, 0), ...sg, fr(day.prot, 0), KCAL[cls].label, day.sport || ''];
+    }), Array.from({ length: 2 + segHead.length }, (_, k) => k + 1));
   const meansTable = means.length ? tableView(['Semaine du', 'Jours comptés', 'Moyenne (kcal/j)', 'Statut'],
     means.map(({ g, st }) => [dayLabel(g.mon), `${st.n}${st.incomplets ? ` (+${st.incomplets} incomplet${st.incomplets > 1 ? 's' : ''})` : ''}`,
       fr(st.mean, 0), st.classe ? KCAL[st.classe].label : '—']), [1, 2], 'Voir les moyennes') : null;
-  return [kcalLegend(nut, true), h('div', { class: 'chart' }, svg), meansTable, table];
+  return [kcalControl(), kcalLegend(nut, vue, true), h('div', { class: 'chart' }, svg), meansTable, table];
 }
 
 /* Moyenne par semaine sur toute la saison : une barre par semaine, cible stricte. */
 export function kcalWeeksChart(items, nut) {
-  const W = 960, H = 270, m = { t: 22, r: 52, b: 34, l: 46 };
+  const vue = ui.kcal, stacked = vue !== 'statut';
+  const W = 960, H = 270 + (stacked ? 24 : 0), m = { t: stacked ? 46 : 22, r: 52, b: 34, l: 46, cap: stacked ? 24 : 0 };
   const cible = nut.cible;
   const { svg, iw, ih, y } = kcalFrame(W, H, m, nut, Math.max(cible ? cible.hi : 0, ...items.map((it) => it.mean)));
   svg.setAttribute('aria-label', SVG_ARIA('Moyenne de calories par jour, semaine par semaine.'));
   const band = iw / items.length, bw = Math.min(40, band * 0.62);
   items.forEach((it, i) => {
     const cx = m.l + band * i + band / 2, x = cx - bw / 2;
+    const segs = stacked ? segmentsMoyens(range7(it.monday), nut, vue) : null;
     const g = s('g', { class: 'col', tabindex: '0', role: 'img',
       'aria-label': `${it.label} : moyenne ${fr(it.mean, 0)} kcal par jour, ${KCAL[it.classe].label}` });
-    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t, width: band, height: ih }),
-      s('path', { class: `kbar ${it.classe}`, d: barPath(x, y(it.mean), bw, y(0)) }),
-      s('text', { class: 'val', x: cx, y: y(it.mean) - 6, 'text-anchor': 'middle' }, fr(it.mean, 0)));
+    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t - m.cap, width: band, height: ih + m.cap }));
+    if (stacked) { stackBar(g, x, bw, y, segs, VUES_KCAL[vue].segs); capMark(g, cx, y(it.mean), it.classe); }
+    else g.append(s('path', { class: `kbar ${it.classe}`, d: barPath(x, y(it.mean), bw, y(0)) }));
+    g.append(s('text', { class: 'val', x: cx, y: y(it.mean) - (stacked ? 28 : 6), 'text-anchor': 'middle' }, fr(it.mean, 0)));
     svg.append(g, s('text', { x: cx, y: H - 10, 'text-anchor': 'middle' }, it.label));
-    bindTip(g, () => [
-      h('div', { class: 't' }, `${it.label} · semaine du ${dayLabel(it.monday)}`),
-      h('div', { class: 'v' }, `${fr(it.mean, 0)} kcal/jour en moyenne`),
-      tipRow(`k-${it.classe}`, `${KCAL[it.classe].glyph} ${KCAL[it.classe].label}`),
-      h('div', { class: 't' }, `${it.n} jour${it.n > 1 ? 's' : ''} comptés${it.incomplets ? `, ${it.incomplets} incomplet${it.incomplets > 1 ? 's' : ''} exclu${it.incomplets > 1 ? 's' : ''}` : ''}`),
-    ]);
+    bindTip(g, () => {
+      const nodes = [
+        h('div', { class: 't' }, `${it.label} · semaine du ${dayLabel(it.monday)}`),
+        h('div', { class: 'v' }, `${fr(it.mean, 0)} kcal/jour en moyenne`),
+        tipRow(`k-${it.classe}`, `${KCAL[it.classe].glyph} ${KCAL[it.classe].label}`),
+      ];
+      if (stacked) {
+        for (const sg of VUES_KCAL[vue].segs.filter((q) => (segs[q.key] || 0) >= 1)) {
+          nodes.push(tipRow(`seg-${sg.cls}`, `${sg.label} : ${fr(segs[sg.key], 0)} kcal (${pct(segs[sg.key], it.mean)} %)`));
+        }
+      }
+      nodes.push(h('div', { class: 't' }, `${it.n} jour${it.n > 1 ? 's' : ''} comptés${it.incomplets ? `, ${it.incomplets} incomplet${it.incomplets > 1 ? 's' : ''} exclu${it.incomplets > 1 ? 's' : ''}` : ''}`));
+      return nodes;
+    });
   });
-  const table = tableView(['Semaine', 'Du', 'Jours comptés', 'Moyenne (kcal/j)', 'Statut'],
-    items.map((it) => [it.label, dayLabel(it.monday), String(it.n), fr(it.mean, 0), KCAL[it.classe].label]), [2, 3]);
-  return [kcalLegend(nut, false), h('div', { class: 'chart' }, svg), table];
+  const segHead = stacked ? VUES_KCAL[vue].segs.map((sg) => `${sg.label} (kcal/j)`) : [];
+  const table = tableView(['Semaine', 'Du', 'Jours comptés', 'Moyenne (kcal/j)', ...segHead, 'Statut'],
+    items.map((it) => {
+      const segs = stacked ? segmentsMoyens(range7(it.monday), nut, vue) : null;
+      return [it.label, dayLabel(it.monday), String(it.n), fr(it.mean, 0),
+        ...(stacked ? VUES_KCAL[vue].segs.map((sg) => fr(segs[sg.key] || 0, 0)) : []), KCAL[it.classe].label];
+    }), Array.from({ length: 2 + segHead.length }, (_, k) => k + 2));
+  return [kcalControl(), kcalLegend(nut, vue, false), h('div', { class: 'chart' }, svg), table];
 }
 
 /* ---------- séances par semaine ---------- */
@@ -271,4 +345,128 @@ export function adherence(d, curNum) {
   const table = tableView(['Semaine', 'Fait', 'Partiel', 'Sautée', 'Déplacée', 'À venir'],
     d.weeks.map((w) => [w.sem, ...['fait', 'partiel', 'skipped', 'deplacee', 'prevu'].map((k) => String(count(w, k)))]), [1, 2, 3, 4, 5]);
   return [legend, h('div', { class: 'adh' }, rows), table];
+}
+
+/* ---------- charges par exercice ---------- */
+export const chargeLabel = (p) => (p.kgMax != null ? `${fr(p.kg)}–${fr(p.kgMax)} kg` : `${fr(p.kg)} kg`);
+
+/* Un petit graphique par exercice : une charge par séance, échelle propre à l'exercice,
+ * échelle de temps commune à tous (on compare les rythmes, pas les kilos). */
+function chargeMini(ex, dom) {
+  const W = 300, H = 132, m = { t: 14, r: 10, b: 24, l: 36 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const vals = ex.points.flatMap((p) => [p.kg, p.kgMax != null ? p.kgMax : p.kg]);
+  const dmin = Math.min(...vals), dmax = Math.max(...vals);
+  const pad = dmax === dmin ? Math.max(1, dmax * 0.1) : (dmax - dmin) * 0.18;
+  const lo = Math.max(0, dmin - pad), hi = dmax + pad;
+  const span = dayDiff(dom.t1, dom.t0);
+  const x = (d) => m.l + (dayDiff(d, dom.t0) / span) * iw;
+  const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': `${ex.nom} : ${ex.points.length} charges relevées, de ${chargeLabel(ex.points[0])} à ${chargeLabel(ex.points[ex.points.length - 1])}.` });
+  for (const v of dmax === dmin ? [dmin] : [dmin, dmax]) {
+    svg.append(s('line', { class: 'grid', x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }),
+      s('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end' }, fr(v)));
+  }
+  let cy = parseDay(dom.t0).getFullYear(), cm = parseDay(dom.t0).getMonth();
+  while (new Date(cy, cm, 1) <= parseDay(dom.t1)) {
+    const fi = `${cy}-${String(cm + 1).padStart(2, '0')}-01`;
+    if (fi >= dom.t0 && fi <= dom.t1) svg.append(s('text', { x: x(fi), y: H - 8, 'text-anchor': 'middle' }, MOIS[cm]));
+    cm += 1;
+    if (cm > 11) { cm = 0; cy += 1; }
+  }
+  if (ex.points.length > 1) {
+    svg.append(s('polyline', { class: 'ef-line', points: ex.points.map((p) => `${x(p.date)},${y(p.kg)}`).join(' ') }));
+  }
+  ex.points.forEach((p) => {
+    const g = s('g', { class: 'pt', tabindex: '0', role: 'img',
+      'aria-label': `${ex.nom}, ${dayLabel(p.date)} : ${chargeLabel(p)}${p.serie ? ', ' + p.serie : ''}` });
+    if (p.kgMax != null) g.append(s('line', { class: 'range', x1: x(p.date), x2: x(p.date), y1: y(p.kg), y2: y(p.kgMax) }));
+    g.append(s('circle', { class: 'hit', cx: x(p.date), cy: y(p.kg), r: 12 }),
+      s('circle', { class: `dot ${p.statut === 'mesure' ? 'm' : 'c'}`, cx: x(p.date), cy: y(p.kg), r: 4.5 }));
+    svg.append(g);
+    bindTip(g, () => [
+      h('div', { class: 't' }, `${ex.nom} · ${dayLabel(p.date)}`),
+      h('div', { class: 'v' }, chargeLabel(p)),
+      p.serie ? h('div', {}, `Série : ${p.serie}`) : null,
+      h('div', { class: 't' }, p.statut === 'mesure' ? 'Charge relevée' : '« Comme prévu » déclaré : la charge du plan, pas une mesure'),
+      p.note ? h('div', { class: 't' }, p.note) : null,
+      h('div', { class: 't' }, `Source : « ${p.extrait} »`),
+    ].filter(Boolean));
+  });
+  return svg;
+}
+
+export function chargesSection(data) {
+  const exs = chargesParExercice(data);
+  const dates = data.charges.entries.map((e) => e.date).sort();
+  const dom = { t0: addDays(dates[0], -4), t1: [addDays(dates[dates.length - 1], 4), todayIso()].sort().pop() };
+  const lastDate = (ex) => ex.points[ex.points.length - 1].date;
+  const multi = exs.filter((e) => e.points.length >= 2)
+    .sort((a, b) => b.points.length - a.points.length || (lastDate(a) < lastDate(b) ? 1 : -1));
+  const single = exs.filter((e) => e.points.length === 1);
+
+  const cards = multi.map((ex) => {
+    const last = ex.points[ex.points.length - 1];
+    return h('div', { class: 'cmini' },
+      h('div', { class: 'cm-h' }, h('strong', {}, ex.nom), h('span', { class: 'note' }, ex.unite)),
+      h('div', { class: 'cm-v' }, h('span', { class: 'big' }, chargeLabel(last)),
+        h('span', { class: 'note' }, ` · ${dayLabel(last.date)} · ${ex.points.length} séances`)),
+      h('div', { class: 'chart' }, chargeMini(ex, dom)));
+  });
+  const legend = h('div', { class: 'legend' },
+    h('span', {}, h('span', { class: 'key dotm' }), 'Charge relevée'),
+    h('span', {}, h('span', { class: 'key dotc' }), '« Comme prévu » déclaré (pas une mesure)'),
+    h('span', {}, h('span', { class: 'key rng' }), 'Fourchette ou séries à charges différentes'));
+  const rows = (list) => list.map((e) => {
+    const meta = data.charges.exercices[e.exercice] || { nom: e.exercice };
+    return [dayLabel(e.date), meta.nom, chargeLabel(e), e.serie || '', e.statut === 'mesure' ? 'relevée' : 'comme prévu', e.extrait];
+  });
+  const head = ['Date', 'Exercice', 'Charge', 'Série', 'Statut', 'Citation du réalisé'];
+  const sorted = [...data.charges.entries].sort((a, b) => (a.date < b.date ? 1 : -1));
+  return [
+    legend,
+    h('div', { class: 'cgrid' }, cards),
+    single.length ? tableView(['Exercice', 'Date', 'Charge', 'Série'],
+      single.map((ex) => [ex.nom, dayLabel(ex.points[0].date), chargeLabel(ex.points[0]), ex.points[0].serie || '']),
+      [], `${single.length} exercice${single.length > 1 ? 's' : ''} avec une seule charge relevée`) : null,
+    tableView(head, rows(sorted), [], `Toutes les charges (${sorted.length})`),
+  ];
+}
+
+/* ---------- km par mois ---------- */
+export function monthlyKmChart(data) {
+  const span = monthsSpan(data);
+  const months = [];
+  for (let ym = span.first; ym <= span.last; ym = shiftMonth(ym, 1)) months.push(ym);
+  const stats = months.map((ym) => ({ ym, ts: trainingStats(data, monthDates(ym)) }));
+  const W = 960, H = 260, m = { t: 22, r: 12, b: 30, l: 38 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const top = Math.ceil(Math.max(10, ...stats.map((x) => x.ts.km)) / 10) * 10;
+  const y = (v) => m.t + ih - (v / top) * ih;
+  const band = iw / months.length, bw = Math.min(48, band * 0.5);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': SVG_ARIA('Kilomètres de course documentés, mois par mois.') });
+  grid(svg, m, W, y, top, 10, String);
+  svg.append(s('text', { x: m.l - 8, y: m.t - 9, 'text-anchor': 'end' }, 'km'));
+  const cur = todayIso().slice(0, 7);
+  stats.forEach(({ ym, ts }, i) => {
+    const cx = m.l + band * i + band / 2, xx = cx - bw / 2;
+    const g = s('g', { class: 'col', tabindex: '0', role: 'img', 'aria-label': `${monthLabel(ym)} : ${fr(ts.km)} km${ts.partiel ? ' (partiel)' : ''}` });
+    g.append(s('rect', { class: 'hit', x: m.l + band * i, y: m.t, width: band, height: ih }));
+    if (ts.km > 0) {
+      g.append(s('path', { class: `bar${ts.partiel ? ' partial' : ''}`, d: barPath(xx, y(ts.km), bw, y(0)) }),
+        s('text', { class: 'val', x: cx, y: y(ts.km) - 6, 'text-anchor': 'middle' }, fr(ts.km)));
+    }
+    svg.append(g, s('text', { class: ym === cur ? 'cur' : '', x: cx, y: H - 10, 'text-anchor': 'middle' }, monthLabel(ym).split(' ')[0]));
+    bindTip(g, () => [
+      h('div', { class: 't' }, monthLabel(ym) + (ym === cur ? ' (en cours)' : '')),
+      h('div', { class: 'v' }, `${fr(ts.km)} km documentés${ts.partiel ? ' (partiel)' : ''}`),
+      h('div', {}, `${ts.faites} séance${ts.faites > 1 ? 's' : ''} faite${ts.faites > 1 ? 's' : ''} sur ${ts.prevues}`),
+      ts.partiel ? h('div', { class: 't' }, 'Des séances de course n’ont pas de distance exploitable : le réel est supérieur.') : null,
+    ].filter(Boolean));
+  });
+  const legend = h('div', { class: 'legend' }, legendItem('s1', 'Documenté'), legendItem('s1soft', 'Documenté, partiel (réel supérieur)'));
+  const table = tableView(['Mois', 'Km documentés', 'Séances faites', 'Complétude'],
+    stats.map(({ ym, ts }) => [monthLabel(ym), fr(ts.km), `${ts.faites} / ${ts.prevues}`, ts.km === 0 ? '—' : ts.partiel ? 'partiel' : 'complet']), [1, 2]);
+  return [legend, h('div', { class: 'chart' }, svg), table];
 }

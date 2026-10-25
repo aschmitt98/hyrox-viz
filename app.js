@@ -3,9 +3,9 @@
  * Aucune donnée dans ce repo : la page lit les repos privés `hyrox-coach` et `nutrition` via l'API
  * GitHub, avec un token fine-grained (Contents : lecture seule) saisi par l'utilisatrice. Les données
  * restent en mémoire ; seul le token peut être mémorisé (case à cocher). */
-import { h, $, hideTip } from './lib.js';
+import { h, $, hideTip, setRerender } from './lib.js';
 import { CFG, ApiError, loadAll, buildIndex } from './data.js';
-import { viewSaison, viewMois, viewSemaine, viewCourses } from './views.js';
+import { viewSaison, viewMois, viewSemaine, viewAnalyse, viewCourses } from './views.js';
 
 const state = { data: null };
 
@@ -100,6 +100,7 @@ function render() {
     saison: (app) => viewSaison(app, state.data, state.data.warnings),
     mois: (app) => viewMois(app, state.data, arg),
     semaine: (app) => viewSemaine(app, state.data, arg),
+    analyse: (app) => viewAnalyse(app, state.data),
     courses: (app) => viewCourses(app, state.data),
   };
   const name = views[route] ? route : 'saison';
@@ -111,6 +112,7 @@ function render() {
   views[name](app);
 }
 
+setRerender(render);
 window.addEventListener('hashchange', render);
 $('refresh').addEventListener('click', () => load(store.get()));
 $('logout').addEventListener('click', logout);

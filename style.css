@@ -19,6 +19,7 @@
   --on-fill: #ffffff;
   --on-warning: #0b0b0b;
   --serious: #ec835a;
+  --series-4: #eda100;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -34,6 +35,7 @@
     --series-1-soft: #184f95;
     --series-2: #d95926;
     --series-3: #199e70;
+    --series-4: #c98500;
   }
 }
 
@@ -262,3 +264,67 @@ h2.cap { text-transform: capitalize; font-size: 20px; }
   .cal-cell { min-height: 72px; padding: 4px; }
   .cal-k { font-size: 10px; padding: 1px 3px; }
 }
+
+/* ---------- semaine : séances en un coup d'œil ---------- */
+.sessions { gap: 10px; }
+.sess { padding: 12px 14px; border-left: 4px solid var(--axis); display: flex; flex-direction: column; gap: 8px; }
+.sess.s-fait { border-left-color: var(--good); } .sess.s-partiel { border-left-color: var(--warning); }
+.sess.s-skipped { border-left-color: var(--critical); } .sess.s-deplacee { border-left-color: var(--neutral); }
+.sess.s-prevu { border-left-color: var(--axis); }
+.sess .sess-h { gap: 10px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 6px; }
+.m { display: inline-flex; align-items: baseline; gap: 4px; border: 1px solid var(--border); background: var(--page); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.m.ghost { color: var(--muted); background: transparent; }
+.m.c-mes { border-color: var(--series-1); }
+.m.c-cp { background: transparent; color: var(--ink2); border-color: var(--axis); }
+.kmbars { display: flex; flex-direction: column; gap: 4px; max-width: 460px; }
+.kmrow { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 8px; font-size: 12px; color: var(--ink2); }
+.kmrow .kt { background: var(--grid); border-radius: 4px; height: 8px; }
+.kmrow .kb { height: 8px; border-radius: 4px; }
+.kmrow .kb.plan { background: var(--axis); } .kmrow .kb.real { background: var(--series-1); }
+.kmrow .kv { min-width: 96px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.kmrow .delta { color: var(--ink2); }
+.alerte { font-size: 13px; color: var(--ink2); border-left: 3px solid var(--warning); padding: 1px 0 1px 8px; }
+details.more > summary { cursor: pointer; font-size: 13px; color: var(--ink2); }
+.sess details { margin-top: 0; }
+.sess .sec h4 { margin: 10px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.sess .txt { font-size: 13.5px; }
+.wkhead .wk-t { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.wkhead h2 { font-size: 17px; }
+.tag { font-size: 12px; color: var(--ink2); background: var(--page); border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; }
+.wkhead details.more { margin-top: 10px; }
+
+/* ---------- analyse : charges par exercice ---------- */
+.cgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; margin-top: 4px; }
+.cmini { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--page); min-width: 0; }
+.cm-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cm-h .note { text-align: right; }
+.cm-v { margin: 2px 0 4px; }
+.cm-v .big { font-size: 20px; font-weight: 600; }
+.chart .range { stroke: var(--series-1); stroke-width: 2; opacity: .5; stroke-linecap: round; }
+.chart .pt .dot.c { fill: var(--surface); stroke: var(--series-1); stroke-width: 2; }
+.key.dotm, .key.dotc, .key.rng { display: inline-block; }
+.key.dotm { width: 10px; height: 10px; border-radius: 50%; background: var(--series-1); }
+.key.dotc { width: 10px; height: 10px; border-radius: 50%; background: transparent; border: 2px solid var(--series-1); }
+.key.rng { width: 3px; height: 14px; border-radius: 2px; background: var(--series-1); opacity: .5; }
+details.table-view + details.table-view { margin-top: 6px; }
+
+/* ---------- calories : empilement par macro / par repas ---------- */
+.seg-ctl { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 10px; padding: 3px; background: var(--page); border: 1px solid var(--border); border-radius: 8px; }
+.seg-ctl .note { padding: 0 8px 0 6px; }
+.seg-ctl button { border: 0; background: transparent; border-radius: 6px; padding: 4px 12px; cursor: pointer; color: var(--ink2); font-size: 13px; }
+.seg-ctl button:hover { background: var(--grid); }
+.seg-ctl button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--axis); }
+.legend .sep { color: var(--axis); }
+.key.seg-s1 { background: var(--series-1); } .key.seg-s2 { background: var(--series-2); }
+.key.seg-s3 { background: var(--series-3); } .key.seg-s4 { background: var(--series-4); }
+.key.seg-sx { background: var(--axis); }
+.chart .stk { stroke: var(--surface); stroke-width: 2px; }
+.chart .stk.s1 { fill: var(--series-1); } .chart .stk.s2 { fill: var(--series-2); }
+.chart .stk.s3 { fill: var(--series-3); } .chart .stk.s4 { fill: var(--series-4); } .chart .stk.sx { fill: var(--axis); }
+.chart .col:hover .stk, .chart .col:focus .stk { opacity: .85; }
+.chart .cap.dans { fill: var(--good); } .chart .cap.sous { fill: var(--warning); } .chart .cap.haut { fill: var(--serious); }
+.chart .cap.incomplet { fill: var(--surface); stroke: var(--axis); stroke-width: 1; }
+.chart text.capg { font-size: 11px; font-weight: 700; fill: var(--on-warning); }
+.chart text.capg.dans { fill: var(--on-fill); }
+.chart text.capg.incomplet { fill: var(--muted); }

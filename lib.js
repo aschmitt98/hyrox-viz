@@ -43,6 +43,15 @@ export function rangeLabel(a, b) {
     : `${da.getDate()} ${MOIS[da.getMonth()]} – ${db.getDate()} ${MOIS[db.getMonth()]}`;
 }
 export const monthLabel = (ym) => { const [y, m] = ym.split('-').map(Number); return `${MOIS_LONG[m - 1]} ${y}`; };
+export const shiftMonth = (ym, k) => {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + k, 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+};
+export const monthDates = (ym) => {
+  const [y, m] = ym.split('-').map(Number);
+  return Array.from({ length: new Date(y, m, 0).getDate() }, (_, i) => `${ym}-${pad2(i + 1)}`);
+};
 export const range7 = (monday) => Array.from({ length: 7 }, (_, i) => addDays(monday, i));
 export const secondes = (txt) => {
   const p = (String(txt).match(/\d+/g) || []).map(Number);
@@ -96,3 +105,17 @@ export const navLink = (href, text, disabled) => disabled
   ? h('span', { class: 'btn off', 'aria-disabled': 'true' }, text)
   : h('a', { class: 'btn', href }, text);
 export const notice = (text) => h('div', { class: 'warn' }, text);
+
+/* ---------- vue des graphiques de calories (choix mémorisé, par commodité) ---------- */
+const VUES = ['statut', 'macros', 'repas'];
+const KEY_VUE = 'hyrox_viz_vue_kcal';
+export const ui = { kcal: 'macros' };
+try { const v = localStorage.getItem(KEY_VUE); if (VUES.includes(v)) ui.kcal = v; } catch (e) { /* stockage indisponible */ }
+let rerender = () => {};
+export const setRerender = (f) => { rerender = f; };
+export function setKcalView(v) {
+  if (!VUES.includes(v)) return;
+  ui.kcal = v;
+  try { localStorage.setItem(KEY_VUE, v); } catch (e) { /* rien */ }
+  rerender();
+}
